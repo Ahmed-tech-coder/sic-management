@@ -92,7 +92,7 @@ const login = async (req, res) => {
                 name: profile.name,
                 phone: profile.phone,
                 email: profile.email,
-                role: profile.role,
+                role: profile.role === 'head' && profile.tracks?.name === 'HR' ? 'hr' : profile.role,
                 head_type: profile.head_type,
                 track_id: profile.track_id,
                 track_name: profile.tracks?.name,
