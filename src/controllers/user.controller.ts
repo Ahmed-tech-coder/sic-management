@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 const createUserSchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters'),
-  phone: z.string().min(8, 'Phone number must be at least 8 characters'),
+  phone: z.string().regex(/^\+[1-9]\d{1,14}$/, 'Phone number must be in E.164 format (e.g. +201228895185)'),
   email: z.string().email('Invalid email address'),
   password: z.string().min(6, 'Password must be at least 6 characters'),
   role: z.enum(['leader', 'head', 'hr']),
@@ -15,7 +15,7 @@ const createUserSchema = z.object({
 
 const updateUserSchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters'),
-  phone: z.string().min(8, 'Phone number must be at least 8 characters'),
+  phone: z.string().regex(/^\+[1-9]\d{1,14}$/, 'Phone number must be in E.164 format (e.g. +201228895185)'),
   email: z.string().email('Invalid email address'),
   password: z.string().min(6, 'Password must be at least 6 characters').optional().nullable(),
   role: z.enum(['leader', 'head', 'hr']),
