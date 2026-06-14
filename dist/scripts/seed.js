@@ -56,7 +56,7 @@ async function seed() {
             console.log('All default tracks already exist.');
         }
         // 3. Seed Leader account
-        const leaderPhone = '01000000000';
+        const leaderPhone = '+201228895185';
         const leaderEmail = 'leader@sic.com';
         const leaderPassword = 'Password123!';
         const leaderName = 'SIC Leader';
