@@ -39,6 +39,33 @@ async function ensureUserExists(user: SeedUser, authUsers: any[]) {
   if (existingAuthUser) {
     console.log(`[SKIP] Auth user already exists: ${user.name} (${user.email} / phone: ${user.phone})`);
     userId = existingAuthUser.id;
+
+    // Sync Auth credentials (email, password, etc.) if they differ or to ensure correctness
+    const emailMatch = existingAuthUser.email?.toLowerCase().trim() === user.email.toLowerCase().trim();
+    if (!emailMatch || user.password) {
+      console.log(`[UPDATE] Syncing credentials for existing Auth user: ${user.email}...`);
+      const updatePayload: any = {
+        email: user.email,
+        email_confirm: true,
+        user_metadata: {
+          name: user.name,
+          role: user.role,
+          head_type: user.head_type || null,
+          track_id: user.track_id || "",
+          is_active: user.is_active,
+        }
+      };
+      if (user.password) {
+        updatePayload.password = user.password;
+      }
+
+      const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(userId, updatePayload);
+      if (updateError) {
+        console.error(`[ERROR] Failed to update Auth user credentials:`, updateError.message);
+      } else {
+        console.log(`[UPDATE] Auth user credentials synced successfully.`);
+      }
+    }
   } else {
     console.log(`[CREATE] Creating Auth user: ${user.name} (${user.email})...`);
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
