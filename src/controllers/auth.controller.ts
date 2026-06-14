@@ -31,17 +31,19 @@ export const login = async (req: Request, res: Response) => {
     let authResult;
     let identifierType: 'email' | 'phone';
 
+    const authClient = getSupabaseClient();
+
     if ('email' in data) {
       identifierType = 'email';
       console.log(`Attempting email authentication for: ${data.email}`);
-      authResult = await supabaseAdmin.auth.signInWithPassword({
+      authResult = await authClient.auth.signInWithPassword({
         email: data.email,
         password: data.password,
       });
     } else {
       identifierType = 'phone';
       console.log(`Attempting phone authentication for: ${data.phone}`);
-      authResult = await supabaseAdmin.auth.signInWithPassword({
+      authResult = await authClient.auth.signInWithPassword({
         phone: data.phone,
         password: data.password,
       });
