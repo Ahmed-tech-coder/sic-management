@@ -32,3 +32,41 @@ export const getActivityLogs = async (req: AuthenticatedRequest, res: Response) 
     return res.status(500).json({ error: 'Internal Server Error' });
   }
 };
+
+export const deleteActivityLog = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const client = getSupabaseClient(req.token);
+
+    const { error } = await client
+      .from('activity_logs')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
+
+    return res.status(200).json({ message: 'Activity log deleted successfully' });
+  } catch (err) {
+    console.error('Delete log error:', err);
+    return res.status(500).json({ error: 'Internal Server Error' });
+  }
+};
+
+export const clearActivityLogs = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const client = getSupabaseClient(req.token);
+
+    // Delete all logs by matching created_at after year 1970
+    const { error } = await client
+      .from('activity_logs')
+      .delete()
+      .gt('created_at', '1970-01-01T00:00:00Z');
+
+    if (error) throw error;
+
+    return res.status(200).json({ message: 'All activity logs cleared successfully' });
+  } catch (err) {
+    console.error('Clear logs error:', err);
+    return res.status(500).json({ error: 'Internal Server Error' });
+  }
+};

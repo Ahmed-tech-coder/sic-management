@@ -5,7 +5,6 @@ import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 
 import authRouter from './routes/auth.routes';
-import seasonRouter from './routes/season.routes';
 import trackRouter from './routes/track.routes';
 import userRouter from './routes/user.routes';
 import memberRouter from './routes/member.routes';
@@ -45,7 +44,6 @@ app.get('/health', (req, res) => {
 
 // API Routes
 app.use('/api/auth', authRouter);
-app.use('/api/seasons', seasonRouter);
 app.use('/api/tracks', trackRouter);
 app.use('/api/users', userRouter);
 app.use('/api/technical-members', memberRouter);

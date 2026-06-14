@@ -17,34 +17,15 @@ const updateEvaluationSchema = zod_1.z.object({
 });
 const getEvaluations = async (req, res) => {
     try {
-        const { track_id, season_id, search, page = '1', limit = '10' } = req.query;
+        const { track_id, search, page = '1', limit = '10' } = req.query;
         const client = (0, supabase_1.getSupabaseClient)(req.token);
         const pageNum = parseInt(page, 10);
         const limitNum = parseInt(limit, 10);
         const from = (pageNum - 1) * limitNum;
         const to = from + limitNum - 1;
-        // 1. Resolve Season ID (default to active season if not specified)
-        let targetSeasonId = season_id;
-        if (!targetSeasonId) {
-            const { data: activeSeason, error: seasonError } = await supabase_1.supabaseAdmin
-                .from('seasons')
-                .select('id')
-                .eq('is_active', true)
-                .maybeSingle();
-            if (seasonError)
-                throw seasonError;
-            if (!activeSeason) {
-                return res.status(400).json({ error: 'No active season found.' });
-            }
-            targetSeasonId = activeSeason.id;
-        }
-        // We select technical_members and tracks via a join.
-        // In Supabase, if we want to filter on inner tables, we can query public.evaluations
-        // and select columns from joined tables:
         let query = client
             .from('evaluations')
-            .select('*, technical_members!inner(*, tracks!inner(name)), evaluator:users(*)', { count: 'exact' })
-            .eq('season_id', targetSeasonId);
+            .select('*, technical_members!inner(*, tracks!inner(name)), evaluator:users(*)', { count: 'exact' });
         // 2. Enforce track constraints based on role
         if (req.user?.role === 'head') {
             query = query.eq('technical_members.track_id', req.user.track_id);
@@ -98,23 +79,13 @@ const createEvaluation = async (req, res) => {
         if (req.user?.role === 'head' && member.track_id !== req.user.track_id) {
             return res.status(403).json({ error: 'Forbidden: You can only evaluate members of your own track' });
         }
-        // 2. Resolve Active Season ID
-        const { data: activeSeason, error: seasonError } = await supabase_1.supabaseAdmin
-            .from('seasons')
-            .select('id')
-            .eq('is_active', true)
-            .maybeSingle();
-        if (seasonError || !activeSeason) {
-            return res.status(400).json({ error: 'No active season found. Cannot create evaluation.' });
-        }
-        // 3. Create evaluation
+        // 2. Create evaluation
         const { data: evaluation, error } = await client
             .from('evaluations')
             .insert({
             task_name,
             technical_member_id,
             evaluator_id: req.user?.id,
-            season_id: activeSeason.id,
             score,
             notes: notes || null,
         })
@@ -243,38 +214,11 @@ const deleteEvaluation = async (req, res) => {
 exports.deleteEvaluation = deleteEvaluation;
 const exportEvaluations = async (req, res) => {
     try {
-        const { track_id, season_id } = req.query;
+        const { track_id } = req.query;
         const client = (0, supabase_1.getSupabaseClient)(req.token);
-        // 1. Resolve Season
-        let targetSeasonId = season_id;
-        let seasonName = 'Active_Season';
-        if (!targetSeasonId) {
-            const { data: activeSeason, error: seasonError } = await supabase_1.supabaseAdmin
-                .from('seasons')
-                .select('id, name')
-                .eq('is_active', true)
-                .maybeSingle();
-            if (seasonError)
-                throw seasonError;
-            if (activeSeason) {
-                targetSeasonId = activeSeason.id;
-                seasonName = activeSeason.name.replace(/\s+/g, '_');
-            }
-        }
-        else {
-            const { data: season } = await supabase_1.supabaseAdmin
-                .from('seasons')
-                .select('name')
-                .eq('id', targetSeasonId)
-                .single();
-            if (season) {
-                seasonName = season.name.replace(/\s+/g, '_');
-            }
-        }
         let query = client
             .from('evaluations')
-            .select('*, technical_members!inner(*, tracks!inner(name)), evaluator:users(name)')
-            .eq('season_id', targetSeasonId);
+            .select('*, technical_members!inner(*, tracks!inner(name)), evaluator:users(name)');
         if (track_id) {
             query = query.eq('technical_members.track_id', track_id);
         }
@@ -304,7 +248,7 @@ const exportEvaluations = async (req, res) => {
             })
                 .join(',')),
         ].join('\n');
-        res.setHeader('Content-Disposition', `attachment; filename=Evaluations_${seasonName}.csv`);
+        res.setHeader('Content-Disposition', `attachment; filename=Evaluations_Report.csv`);
         res.setHeader('Content-Type', 'text/csv; charset=utf-8');
         return res.status(200).send(csvContent);
     }

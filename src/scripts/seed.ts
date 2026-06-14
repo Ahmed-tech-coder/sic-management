@@ -137,27 +137,7 @@ async function seed() {
   console.log("Starting database seeding...");
 
   try {
-    // 1. Seed active season if none exists
-    const { data: existingSeasons, error: seasonCheckError } =
-      await supabaseAdmin.from("seasons").select("id");
-
-    if (seasonCheckError) throw seasonCheckError;
-
-    let activeSeasonId = "";
-    if (!existingSeasons || existingSeasons.length === 0) {
-      console.log("Creating default Season 2026...");
-      const { data: newSeason, error: seasonInsertError } = await supabaseAdmin
-        .from("seasons")
-        .insert({ name: "Season 2026", is_active: true })
-        .select()
-        .single();
-
-      if (seasonInsertError) throw seasonInsertError;
-      activeSeasonId = newSeason.id;
-      console.log("Default season created:", newSeason.name);
-    } else {
-      console.log("Seasons already exist.");
-    }
+    // 1. Seasons seeding removed (Seasons concept deleted)
 
     // 2. Seed default tracks
     const { data: existingTracks, error: trackCheckError } = await supabaseAdmin

@@ -9,7 +9,6 @@ const helmet_1 = __importDefault(require("helmet"));
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const dotenv_1 = __importDefault(require("dotenv"));
 const auth_routes_1 = __importDefault(require("./routes/auth.routes"));
-const season_routes_1 = __importDefault(require("./routes/season.routes"));
 const track_routes_1 = __importDefault(require("./routes/track.routes"));
 const user_routes_1 = __importDefault(require("./routes/user.routes"));
 const member_routes_1 = __importDefault(require("./routes/member.routes"));
@@ -41,7 +40,6 @@ app.get('/health', (req, res) => {
 });
 // API Routes
 app.use('/api/auth', auth_routes_1.default);
-app.use('/api/seasons', season_routes_1.default);
 app.use('/api/tracks', track_routes_1.default);
 app.use('/api/users', user_routes_1.default);
 app.use('/api/technical-members', member_routes_1.default);

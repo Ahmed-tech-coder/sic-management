@@ -17,31 +17,15 @@ const updateMemberSchema = zod_1.z.object({
 });
 const getMembers = async (req, res) => {
     try {
-        const { track_id, season_id, search, page = '1', limit = '10' } = req.query;
+        const { track_id, search, page = '1', limit = '10' } = req.query;
         const client = (0, supabase_1.getSupabaseClient)(req.token);
         const pageNum = parseInt(page, 10);
         const limitNum = parseInt(limit, 10);
         const from = (pageNum - 1) * limitNum;
         const to = from + limitNum - 1;
-        // 1. Resolve Season ID (default to active season if not specified)
-        let targetSeasonId = season_id;
-        if (!targetSeasonId) {
-            const { data: activeSeason, error: seasonError } = await supabase_1.supabaseAdmin
-                .from('seasons')
-                .select('id')
-                .eq('is_active', true)
-                .maybeSingle();
-            if (seasonError)
-                throw seasonError;
-            if (!activeSeason) {
-                return res.status(400).json({ error: 'No active season found. Please create and activate a season first.' });
-            }
-            targetSeasonId = activeSeason.id;
-        }
         let query = client
             .from('technical_members')
-            .select('*, tracks(name), seasons(name)', { count: 'exact' })
-            .eq('season_id', targetSeasonId);
+            .select('*, tracks(name)', { count: 'exact' });
         // 2. Enforce track constraints based on role
         if (req.user?.role === 'head') {
             query = query.eq('track_id', req.user.track_id);
@@ -90,17 +74,8 @@ const createMember = async (req, res) => {
             // HR must supply track_id
             return res.status(400).json({ error: 'Track must be specified' });
         }
-        // 2. Resolve Active Season ID
-        const { data: activeSeason, error: seasonError } = await supabase_1.supabaseAdmin
-            .from('seasons')
-            .select('id')
-            .eq('is_active', true)
-            .maybeSingle();
-        if (seasonError || !activeSeason) {
-            return res.status(400).json({ error: 'No active season found. Cannot create member.' });
-        }
         const client = (0, supabase_1.getSupabaseClient)(req.token);
-        // 3. Insert technical member
+        // 2. Insert technical member
         const { data: member, error } = await client
             .from('technical_members')
             .insert({
@@ -108,7 +83,6 @@ const createMember = async (req, res) => {
             phone,
             email,
             track_id,
-            season_id: activeSeason.id,
         })
             .select('*, tracks(name)')
             .single();

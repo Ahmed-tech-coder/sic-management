@@ -5,7 +5,7 @@ const supabase_1 = require("../config/supabase");
 const zod_1 = require("zod");
 const createUserSchema = zod_1.z.object({
     name: zod_1.z.string().min(2, 'Name must be at least 2 characters'),
-    phone: zod_1.z.string().min(8, 'Phone number must be at least 8 characters'),
+    phone: zod_1.z.string().regex(/^\+[1-9]\d{1,14}$/, 'Phone number must be in E.164 format (e.g. +201228895185)'),
     email: zod_1.z.string().email('Invalid email address'),
     password: zod_1.z.string().min(6, 'Password must be at least 6 characters'),
     role: zod_1.z.enum(['leader', 'head', 'hr']),
@@ -14,7 +14,7 @@ const createUserSchema = zod_1.z.object({
 });
 const updateUserSchema = zod_1.z.object({
     name: zod_1.z.string().min(2, 'Name must be at least 2 characters'),
-    phone: zod_1.z.string().min(8, 'Phone number must be at least 8 characters'),
+    phone: zod_1.z.string().regex(/^\+[1-9]\d{1,14}$/, 'Phone number must be in E.164 format (e.g. +201228895185)'),
     email: zod_1.z.string().email('Invalid email address'),
     password: zod_1.z.string().min(6, 'Password must be at least 6 characters').optional().nullable(),
     role: zod_1.z.enum(['leader', 'head', 'hr']),
