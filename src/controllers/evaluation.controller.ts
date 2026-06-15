@@ -2,6 +2,9 @@ import { Response } from 'express';
 import { supabaseAdmin, getSupabaseClient } from '../config/supabase';
 import { AuthenticatedRequest } from '../middlewares/auth.middleware';
 import { z } from 'zod';
+import { Readable } from 'stream';
+import { auditEmitter } from '../utils/auditLogger';
+import { memoryCache } from '../utils/cache';
 
 const createEvaluationSchema = z.object({
   task_name: z.string().min(2, 'Task name must be at least 2 characters'),
@@ -105,14 +108,17 @@ export const createEvaluation = async (req: AuthenticatedRequest, res: Response)
 
     if (error) throw error;
 
-    // Log admin action
-    await supabaseAdmin.from('activity_logs').insert({
-      user_id: req.user?.id,
+    // Log admin action asynchronously
+    auditEmitter.emitLog({
+      userId: req.user?.id || '',
       action: 'Created Evaluation',
-      entity_type: 'evaluations',
-      entity_id: evaluation.id,
+      entityType: 'evaluations',
+      entityId: evaluation.id,
       description: `Evaluated ${member.name} for task "${task_name}" with score ${score}/100`,
     });
+
+    // Invalidate dashboard metrics cache
+    memoryCache.clearPattern(/^dashboard-metrics:/);
 
     return res.status(201).json({
       message: 'Evaluation created successfully',
@@ -178,14 +184,17 @@ export const updateEvaluation = async (req: AuthenticatedRequest, res: Response)
 
     if (error) throw error;
 
-    // Log admin action
-    await supabaseAdmin.from('activity_logs').insert({
-      user_id: req.user?.id,
+    // Log admin action asynchronously
+    auditEmitter.emitLog({
+      userId: req.user?.id || '',
       action: 'Updated Evaluation',
-      entity_type: 'evaluations',
-      entity_id: id,
+      entityType: 'evaluations',
+      entityId: id as string,
       description: `Updated evaluation for ${member.name} - task "${task_name}" - score ${score}/100`,
     });
+
+    // Invalidate dashboard metrics cache
+    memoryCache.clearPattern(/^dashboard-metrics:/);
 
     return res.status(200).json({
       message: 'Evaluation updated successfully',
@@ -220,14 +229,17 @@ export const deleteEvaluation = async (req: AuthenticatedRequest, res: Response)
 
     if (error) throw error;
 
-    // Log admin action
-    await supabaseAdmin.from('activity_logs').insert({
-      user_id: req.user?.id,
+    // Log admin action asynchronously
+    auditEmitter.emitLog({
+      userId: req.user?.id || '',
       action: 'Deleted Evaluation',
-      entity_type: 'evaluations',
-      entity_id: id,
+      entityType: 'evaluations',
+      entityId: id as string,
       description: `Deleted evaluation of ${Array.isArray(evaluation.technical_members) ? evaluation.technical_members[0]?.name : (evaluation.technical_members as any)?.name || 'Unknown'} for task "${evaluation.task_name}"`,
     });
+
+    // Invalidate dashboard metrics cache
+    memoryCache.clearPattern(/^dashboard-metrics:/);
 
     return res.status(200).json({ message: 'Evaluation deleted successfully' });
   } catch (err) {
@@ -236,55 +248,94 @@ export const deleteEvaluation = async (req: AuthenticatedRequest, res: Response)
   }
 };
 
-export const exportEvaluations = async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const { track_id } = req.query;
-    const client = getSupabaseClient(req.token);
+// Helper generator function for CSV streaming to achieve O(1) memory footprint
+async function* getEvaluationsCsvGenerator(client: any, trackId: any) {
+  yield 'Task Name,Technical Member,Track,Evaluator,Score,Notes,Created Date\n';
+
+  let page = 0;
+  const limit = 500;
+  let hasMore = true;
+
+  while (hasMore) {
+    const from = page * limit;
+    const to = from + limit - 1;
 
     let query = client
       .from('evaluations')
       .select('*, technical_members!inner(*, tracks!inner(name)), evaluator:users(name)');
 
-    if (track_id) {
-      query = query.eq('technical_members.track_id', track_id);
+    if (trackId) {
+      query = query.eq('technical_members.track_id', trackId);
     }
 
-    const { data: evaluations, error } = await query.order('created_at', { ascending: false });
+    const { data, error } = await query
+      .order('created_at', { ascending: false })
+      .range(from, to);
 
-    if (error) throw error;
+    if (error) {
+      throw error;
+    }
 
-    // 2. Generate CSV
-    const headers = ['Task Name', 'Technical Member', 'Track', 'Evaluator', 'Score', 'Notes', 'Created Date'];
-    const rows = (evaluations || []).map((ev: any) => [
-      ev.task_name,
-      ev.technical_members?.name,
-      ev.technical_members?.tracks?.name,
-      ev.evaluator?.name || 'System',
-      ev.score,
-      ev.notes || '',
-      new Date(ev.created_at).toLocaleDateString(),
-    ]);
+    if (!data || data.length === 0) {
+      hasMore = false;
+      break;
+    }
 
-    // CSV format escape double quotes
-    const csvContent = [
-      headers.join(','),
-      ...rows.map((row) =>
-        row
-          .map((value) => {
-            const strValue = String(value).replace(/"/g, '""');
-            return strValue.includes(',') || strValue.includes('\n') || strValue.includes('"')
-              ? `"${strValue}"`
-              : strValue;
-          })
-          .join(',')
-      ),
-    ].join('\n');
+    for (const ev of data) {
+      const row = [
+        ev.task_name,
+        ev.technical_members?.name || '',
+        ev.technical_members?.tracks?.name || '',
+        ev.evaluator?.name || 'System',
+        ev.score,
+        ev.notes || '',
+        new Date(ev.created_at).toLocaleDateString(),
+      ];
+
+      const csvRow = row
+        .map((value) => {
+          const strValue = String(value ?? '').replace(/"/g, '""');
+          return strValue.includes(',') || strValue.includes('\n') || strValue.includes('\r') || strValue.includes('"')
+            ? `"${strValue}"`
+            : strValue;
+        })
+        .join(',') + '\n';
+
+      yield csvRow;
+    }
+
+    if (data.length < limit) {
+      hasMore = false;
+    } else {
+      page++;
+    }
+  }
+}
+
+export const exportEvaluations = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { track_id } = req.query;
+    const client = getSupabaseClient(req.token);
 
     res.setHeader('Content-Disposition', `attachment; filename=Evaluations_Report.csv`);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    return res.status(200).send(csvContent);
+
+    const csvStream = Readable.from(getEvaluationsCsvGenerator(client, track_id));
+
+    csvStream.on('error', (err) => {
+      console.error('CSV Stream processing error:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Internal Server Error during streaming' });
+      } else {
+        res.end();
+      }
+    });
+
+    csvStream.pipe(res);
   } catch (err) {
     console.error('Export evaluations error:', err);
-    return res.status(500).json({ error: 'Internal Server Error' });
+    if (!res.headersSent) {
+      return res.status(500).json({ error: 'Internal Server Error' });
+    }
   }
 };

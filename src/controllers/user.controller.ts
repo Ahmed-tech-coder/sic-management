@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { supabaseAdmin, getSupabaseClient } from '../config/supabase';
 import { AuthenticatedRequest } from '../middlewares/auth.middleware';
 import { z } from 'zod';
+import { auditEmitter } from '../utils/auditLogger';
 
 const createUserSchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters'),
@@ -121,12 +122,12 @@ export const createUser = async (req: AuthenticatedRequest, res: Response) => {
       return res.status(500).json({ error: 'User created in auth but profile sync failed' });
     }
 
-    // 3. Log administrative action
-    await supabaseAdmin.from('activity_logs').insert({
-      user_id: req.user?.id,
+    // Log administrative action asynchronously
+    auditEmitter.emitLog({
+      userId: req.user?.id || '',
       action: 'Created User',
-      entity_type: 'users',
-      entity_id: newProfile.id,
+      entityType: 'users',
+      entityId: newProfile.id,
       description: `Created user ${name} (${role}${head_type ? ' - ' + head_type : ''})`,
     });
 
@@ -200,12 +201,12 @@ export const updateUser = async (req: AuthenticatedRequest, res: Response) => {
       throw profileError || new Error('Profile update failed');
     }
 
-    // 3. Log administrative action
-    await supabaseAdmin.from('activity_logs').insert({
-      user_id: req.user?.id,
+    // Log administrative action asynchronously
+    auditEmitter.emitLog({
+      userId: req.user?.id || '',
       action: 'Updated User',
-      entity_type: 'users',
-      entity_id: id,
+      entityType: 'users',
+      entityId: id as string,
       description: `Updated user ${name} (${role}${head_type ? ' - ' + head_type : ''})`,
     });
 
@@ -238,12 +239,12 @@ export const deleteUser = async (req: AuthenticatedRequest, res: Response) => {
     const { error: deleteError } = await supabaseAdmin.auth.admin.deleteUser(id as string);
     if (deleteError) throw deleteError;
 
-    // Log administrative action
-    await supabaseAdmin.from('activity_logs').insert({
-      user_id: req.user?.id,
+    // Log administrative action asynchronously
+    auditEmitter.emitLog({
+      userId: req.user?.id || '',
       action: 'Deleted User',
-      entity_type: 'users',
-      entity_id: id,
+      entityType: 'users',
+      entityId: id as string,
       description: `Deleted user ${user.name} (${user.role})`,
     });
 

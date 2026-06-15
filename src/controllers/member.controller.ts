@@ -2,6 +2,8 @@ import { Response } from 'express';
 import { supabaseAdmin, getSupabaseClient } from '../config/supabase';
 import { AuthenticatedRequest } from '../middlewares/auth.middleware';
 import { z } from 'zod';
+import { auditEmitter } from '../utils/auditLogger';
+import { memoryCache } from '../utils/cache';
 
 const createMemberSchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters'),
@@ -103,14 +105,17 @@ export const createMember = async (req: AuthenticatedRequest, res: Response) => 
       throw error;
     }
 
-    // Log admin action
-    await supabaseAdmin.from('activity_logs').insert({
-      user_id: req.user?.id,
+    // Log admin action asynchronously
+    auditEmitter.emitLog({
+      userId: req.user?.id || '',
       action: 'Added Technical Member',
-      entity_type: 'technical_members',
-      entity_id: member.id,
+      entityType: 'technical_members',
+      entityId: member.id,
       description: `Added technical member ${name} to track ${member.tracks?.name}`,
     });
+
+    // Invalidate dashboard metrics cache
+    memoryCache.clearPattern(/^dashboard-metrics:/);
 
     return res.status(201).json({
       message: 'Technical member added successfully',
@@ -173,14 +178,17 @@ export const updateMember = async (req: AuthenticatedRequest, res: Response) => 
       throw error;
     }
 
-    // Log admin action
-    await supabaseAdmin.from('activity_logs').insert({
-      user_id: req.user?.id,
+    // Log admin action asynchronously
+    auditEmitter.emitLog({
+      userId: req.user?.id || '',
       action: 'Updated Technical Member',
-      entity_type: 'technical_members',
-      entity_id: id,
+      entityType: 'technical_members',
+      entityId: id as string,
       description: `Updated technical member ${name}`,
     });
+
+    // Invalidate dashboard metrics cache
+    memoryCache.clearPattern(/^dashboard-metrics:/);
 
     return res.status(200).json({
       message: 'Technical member updated successfully',
@@ -215,14 +223,17 @@ export const deleteMember = async (req: AuthenticatedRequest, res: Response) => 
 
     if (error) throw error;
 
-    // Log admin action
-    await supabaseAdmin.from('activity_logs').insert({
-      user_id: req.user?.id,
+    // Log admin action asynchronously
+    auditEmitter.emitLog({
+      userId: req.user?.id || '',
       action: 'Deleted Technical Member',
-      entity_type: 'technical_members',
-      entity_id: id,
+      entityType: 'technical_members',
+      entityId: id as string,
       description: `Deleted technical member ${member.name}`,
     });
+
+    // Invalidate dashboard metrics cache
+    memoryCache.clearPattern(/^dashboard-metrics:/);
 
     return res.status(200).json({ message: 'Technical member deleted successfully' });
   } catch (err) {

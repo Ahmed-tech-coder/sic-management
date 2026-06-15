@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.deleteUser = exports.updateUser = exports.createUser = exports.getUsers = void 0;
 const supabase_1 = require("../config/supabase");
 const zod_1 = require("zod");
+const auditLogger_1 = require("../utils/auditLogger");
 const createUserSchema = zod_1.z.object({
     name: zod_1.z.string().min(2, 'Name must be at least 2 characters'),
     phone: zod_1.z.string().regex(/^\+[1-9]\d{1,14}$/, 'Phone number must be in E.164 format (e.g. +201228895185)'),
@@ -107,12 +108,12 @@ const createUser = async (req, res) => {
         if (profileError || !newProfile) {
             return res.status(500).json({ error: 'User created in auth but profile sync failed' });
         }
-        // 3. Log administrative action
-        await supabase_1.supabaseAdmin.from('activity_logs').insert({
-            user_id: req.user?.id,
+        // Log administrative action asynchronously
+        auditLogger_1.auditEmitter.emitLog({
+            userId: req.user?.id || '',
             action: 'Created User',
-            entity_type: 'users',
-            entity_id: newProfile.id,
+            entityType: 'users',
+            entityId: newProfile.id,
             description: `Created user ${name} (${role}${head_type ? ' - ' + head_type : ''})`,
         });
         return res.status(201).json({
@@ -178,12 +179,12 @@ const updateUser = async (req, res) => {
         if (profileError || !updatedProfile) {
             throw profileError || new Error('Profile update failed');
         }
-        // 3. Log administrative action
-        await supabase_1.supabaseAdmin.from('activity_logs').insert({
-            user_id: req.user?.id,
+        // Log administrative action asynchronously
+        auditLogger_1.auditEmitter.emitLog({
+            userId: req.user?.id || '',
             action: 'Updated User',
-            entity_type: 'users',
-            entity_id: id,
+            entityType: 'users',
+            entityId: id,
             description: `Updated user ${name} (${role}${head_type ? ' - ' + head_type : ''})`,
         });
         return res.status(200).json({
@@ -213,12 +214,12 @@ const deleteUser = async (req, res) => {
         const { error: deleteError } = await supabase_1.supabaseAdmin.auth.admin.deleteUser(id);
         if (deleteError)
             throw deleteError;
-        // Log administrative action
-        await supabase_1.supabaseAdmin.from('activity_logs').insert({
-            user_id: req.user?.id,
+        // Log administrative action asynchronously
+        auditLogger_1.auditEmitter.emitLog({
+            userId: req.user?.id || '',
             action: 'Deleted User',
-            entity_type: 'users',
-            entity_id: id,
+            entityType: 'users',
+            entityId: id,
             description: `Deleted user ${user.name} (${user.role})`,
         });
         return res.status(200).json({ message: 'User deleted successfully' });
