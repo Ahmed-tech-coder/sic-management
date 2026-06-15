@@ -59,7 +59,5 @@ export const sessionRateLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests. Please try again later.' },
-  validate: {
-    defaultKeys: false,
-  },
+  validate: false,
 });
