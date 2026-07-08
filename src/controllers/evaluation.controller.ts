@@ -384,6 +384,7 @@ export const importEvaluations = async (req: AuthenticatedRequest, res: Response
     }
 
     const client = getSupabaseClient(req.token);
+    const trackId = req.user?.track_id;
 
     // 1. Fetch all members across all tracks for name matching
     const { data: trackMembers, error: membersError } = await client
@@ -398,7 +399,36 @@ export const importEvaluations = async (req: AuthenticatedRequest, res: Response
       memberMap.set(m.name.trim().toLowerCase(), m.id);
     }
 
-    // Fetch existing evaluations for duplicate detection
+    // 2. Pre-process rows to find students that need to be auto-created
+    const missingNames = new Set<string>();
+    for (const raw of rows) {
+      const name = raw.student_name?.toString().trim().toLowerCase();
+      if (name && !memberMap.has(name)) {
+        missingNames.add(raw.student_name?.toString().trim());
+      }
+    }
+
+    // Auto-create missing students in the head's track
+    if (missingNames.size > 0) {
+      const newMembers = Array.from(missingNames).map((name) => ({
+        name,
+        track_id: trackId,
+      }));
+
+      const { data: createdMembers, error: createError } = await client
+        .from('technical_members')
+        .insert(newMembers)
+        .select('id, name');
+
+      if (createError) throw createError;
+
+      // Add newly created members to the lookup map
+      for (const m of createdMembers || []) {
+        memberMap.set(m.name.trim().toLowerCase(), m.id);
+      }
+    }
+
+    // 3. Fetch existing evaluations for duplicate detection
     const memberIds = Array.from(memberMap.values());
     const existingSet = new Set<string>();
     if (memberIds.length > 0) {
@@ -441,7 +471,7 @@ export const importEvaluations = async (req: AuthenticatedRequest, res: Response
 
       const memberId = memberMap.get(student_name.toLowerCase());
       if (!memberId) {
-        results.push({ row: i + 1, status: 'error', error: `Student "${student_name}" not found in your track` });
+        results.push({ row: i + 1, status: 'error', error: `Could not resolve student "${student_name}"` });
         continue;
       }
 

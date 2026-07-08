@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.exportEvaluations = exports.deleteEvaluation = exports.updateEvaluation = exports.createEvaluation = exports.getEvaluations = void 0;
+exports.importEvaluations = exports.exportEvaluations = exports.deleteEvaluation = exports.updateEvaluation = exports.createEvaluation = exports.getEvaluations = void 0;
 const supabase_1 = require("../config/supabase");
 const zod_1 = require("zod");
 const stream_1 = require("stream");
@@ -9,14 +9,22 @@ const cache_1 = require("../utils/cache");
 const createEvaluationSchema = zod_1.z.object({
     task_name: zod_1.z.string().min(2, 'Task name must be at least 2 characters'),
     technical_member_id: zod_1.z.string().uuid('Invalid technical member ID'),
-    score: zod_1.z.number().min(0, 'Score must be at least 0').max(100, 'Score cannot exceed 100'),
+    score: zod_1.z.number().min(0, 'Score must be at least 0'),
+    max_score: zod_1.z.number().min(1, 'Max score must be at least 1').default(100),
     notes: zod_1.z.string().optional().nullable(),
+}).refine(data => data.score <= (data.max_score ?? 100), {
+    message: 'Score cannot exceed the task max score',
+    path: ['score'],
 });
 const updateEvaluationSchema = zod_1.z.object({
     task_name: zod_1.z.string().min(2, 'Task name must be at least 2 characters'),
     technical_member_id: zod_1.z.string().uuid('Invalid technical member ID'),
-    score: zod_1.z.number().min(0, 'Score must be at least 0').max(100, 'Score cannot exceed 100'),
+    score: zod_1.z.number().min(0, 'Score must be at least 0'),
+    max_score: zod_1.z.number().min(1, 'Max score must be at least 1').default(100),
     notes: zod_1.z.string().optional().nullable(),
+}).refine(data => data.score <= (data.max_score ?? 100), {
+    message: 'Score cannot exceed the task max score',
+    path: ['score'],
 });
 const getEvaluations = async (req, res) => {
     try {
@@ -67,7 +75,7 @@ const createEvaluation = async (req, res) => {
         if (!parsed.success) {
             return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Validation error' });
         }
-        const { task_name, technical_member_id, score, notes } = parsed.data;
+        const { task_name, technical_member_id, score, max_score, notes } = parsed.data;
         const client = (0, supabase_1.getSupabaseClient)(req.token);
         // 1. Fetch member to check if they exist and match the Head's track
         const { data: member, error: memberError } = await client
@@ -82,6 +90,16 @@ const createEvaluation = async (req, res) => {
         if (req.user?.role === 'head' && member.track_id !== req.user.track_id) {
             return res.status(403).json({ error: 'Forbidden: You can only evaluate members of your own track' });
         }
+        // Check for duplicate: same student + same task
+        const { data: existingEval } = await client
+            .from('evaluations')
+            .select('id')
+            .eq('technical_member_id', technical_member_id)
+            .eq('task_name', task_name)
+            .maybeSingle();
+        if (existingEval) {
+            return res.status(409).json({ error: `This student has already been evaluated for "${task_name}"` });
+        }
         // 2. Create evaluation
         const { data: evaluation, error } = await client
             .from('evaluations')
@@ -90,6 +108,7 @@ const createEvaluation = async (req, res) => {
             technical_member_id,
             evaluator_id: req.user?.id,
             score,
+            max_score: max_score ?? 100,
             notes: notes || null,
         })
             .select('*, technical_members(name, track_id)')
@@ -102,7 +121,7 @@ const createEvaluation = async (req, res) => {
             action: 'Created Evaluation',
             entityType: 'evaluations',
             entityId: evaluation.id,
-            description: `Evaluated ${member.name} for task "${task_name}" with score ${score}/100`,
+            description: `Evaluated ${member.name} for task "${task_name}" with score ${score}/${max_score ?? 100}`,
         });
         // Invalidate dashboard metrics cache
         cache_1.memoryCache.clearPattern(/^dashboard-metrics:/);
@@ -124,7 +143,7 @@ const updateEvaluation = async (req, res) => {
         if (!parsed.success) {
             return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Validation error' });
         }
-        const { task_name, technical_member_id, score, notes } = parsed.data;
+        const { task_name, technical_member_id, score, max_score, notes } = parsed.data;
         const client = (0, supabase_1.getSupabaseClient)(req.token);
         // 1. Fetch existing evaluation
         const { data: existingEvaluation, error: evalError } = await client
@@ -155,6 +174,7 @@ const updateEvaluation = async (req, res) => {
             task_name,
             technical_member_id,
             score,
+            max_score: max_score ?? 100,
             notes: notes || null,
             updated_at: new Date().toISOString(),
         })
@@ -169,7 +189,7 @@ const updateEvaluation = async (req, res) => {
             action: 'Updated Evaluation',
             entityType: 'evaluations',
             entityId: id,
-            description: `Updated evaluation for ${member.name} - task "${task_name}" - score ${score}/100`,
+            description: `Updated evaluation for ${member.name} - task "${task_name}" - score ${score}/${max_score ?? 100}`,
         });
         // Invalidate dashboard metrics cache
         cache_1.memoryCache.clearPattern(/^dashboard-metrics:/);
@@ -223,7 +243,7 @@ const deleteEvaluation = async (req, res) => {
 exports.deleteEvaluation = deleteEvaluation;
 // Helper generator function for CSV streaming to achieve O(1) memory footprint
 async function* getEvaluationsCsvGenerator(client, trackId) {
-    yield 'Task Name,Technical Member,Track,Evaluator,Score,Notes,Created Date\n';
+    yield 'Task Name,Technical Member,Track,Evaluator,Score,Max Score,Notes,Created Date\n';
     let page = 0;
     const limit = 500;
     let hasMore = true;
@@ -253,6 +273,7 @@ async function* getEvaluationsCsvGenerator(client, trackId) {
                 ev.technical_members?.tracks?.name || '',
                 ev.evaluator?.name || 'System',
                 ev.score,
+                ev.max_score ?? 100,
                 ev.notes || '',
                 new Date(ev.created_at).toLocaleDateString(),
             ];
@@ -300,3 +321,165 @@ const exportEvaluations = async (req, res) => {
     }
 };
 exports.exportEvaluations = exportEvaluations;
+// Bulk import evaluations from parsed CSV data
+const importRowSchema = zod_1.z.object({
+    assessment_name: zod_1.z.string().min(1, 'Assessment name is required'),
+    student_name: zod_1.z.string().min(1, 'Student name is required'),
+    total_grade: zod_1.z.number().min(1, 'Total grade must be at least 1'),
+    student_grade: zod_1.z.number().min(0, 'Student grade must be at least 0'),
+});
+const importEvaluations = async (req, res) => {
+    try {
+        const { rows } = req.body;
+        if (!Array.isArray(rows) || rows.length === 0) {
+            return res.status(400).json({ error: 'No data rows provided' });
+        }
+        if (rows.length > 500) {
+            return res.status(400).json({ error: 'Cannot import more than 500 rows at once' });
+        }
+        const client = (0, supabase_1.getSupabaseClient)(req.token);
+        const trackId = req.user?.track_id;
+        // 1. Fetch all members across all tracks for name matching
+        const { data: trackMembers, error: membersError } = await client
+            .from('technical_members')
+            .select('id, name, track_id');
+        if (membersError)
+            throw membersError;
+        // Build a name -> id lookup map (case-insensitive, trimmed)
+        const memberMap = new Map();
+        for (const m of trackMembers || []) {
+            memberMap.set(m.name.trim().toLowerCase(), m.id);
+        }
+        // 2. Pre-process rows to find students that need to be auto-created
+        const missingNames = new Set();
+        for (const raw of rows) {
+            const name = raw.student_name?.toString().trim().toLowerCase();
+            if (name && !memberMap.has(name)) {
+                missingNames.add(raw.student_name?.toString().trim());
+            }
+        }
+        // Auto-create missing students in the head's track
+        if (missingNames.size > 0) {
+            const newMembers = Array.from(missingNames).map((name) => ({
+                name,
+                track_id: trackId,
+            }));
+            const { data: createdMembers, error: createError } = await client
+                .from('technical_members')
+                .insert(newMembers)
+                .select('id, name');
+            if (createError)
+                throw createError;
+            // Add newly created members to the lookup map
+            for (const m of createdMembers || []) {
+                memberMap.set(m.name.trim().toLowerCase(), m.id);
+            }
+        }
+        // 3. Fetch existing evaluations for duplicate detection
+        const memberIds = Array.from(memberMap.values());
+        const existingSet = new Set();
+        if (memberIds.length > 0) {
+            const { data: existingEvals } = await client
+                .from('evaluations')
+                .select('task_name, technical_member_id')
+                .in('technical_member_id', memberIds);
+            for (const ev of existingEvals || []) {
+                existingSet.add(`${ev.technical_member_id}::${ev.task_name.trim().toLowerCase()}`);
+            }
+        }
+        // Track duplicates within the CSV itself
+        const csvSeenSet = new Set();
+        const results = [];
+        const insertPayloads = [];
+        for (let i = 0; i < rows.length; i++) {
+            const raw = rows[i];
+            const parsed = importRowSchema.safeParse({
+                assessment_name: raw.assessment_name?.toString().trim(),
+                student_name: raw.student_name?.toString().trim(),
+                total_grade: Number(raw.total_grade),
+                student_grade: Number(raw.student_grade),
+            });
+            if (!parsed.success) {
+                results.push({ row: i + 1, status: 'error', error: parsed.error.issues[0]?.message || 'Validation error' });
+                continue;
+            }
+            const { assessment_name, student_name, total_grade, student_grade } = parsed.data;
+            if (student_grade > total_grade) {
+                results.push({ row: i + 1, status: 'error', error: `Student grade (${student_grade}) exceeds total grade (${total_grade})` });
+                continue;
+            }
+            const memberId = memberMap.get(student_name.toLowerCase());
+            if (!memberId) {
+                results.push({ row: i + 1, status: 'error', error: `Could not resolve student "${student_name}"` });
+                continue;
+            }
+            // Check for duplicate in existing DB records
+            const dupeKey = `${memberId}::${assessment_name.trim().toLowerCase()}`;
+            if (existingSet.has(dupeKey)) {
+                results.push({ row: i + 1, status: 'error', error: `"${student_name}" already evaluated for "${assessment_name}"` });
+                continue;
+            }
+            // Check for duplicate within the same CSV file
+            if (csvSeenSet.has(dupeKey)) {
+                results.push({ row: i + 1, status: 'error', error: `Duplicate entry in CSV: "${student_name}" for "${assessment_name}"` });
+                continue;
+            }
+            csvSeenSet.add(dupeKey);
+            insertPayloads.push({
+                index: i,
+                data: {
+                    task_name: assessment_name,
+                    technical_member_id: memberId,
+                    evaluator_id: req.user?.id,
+                    score: student_grade,
+                    max_score: total_grade,
+                    notes: null,
+                },
+            });
+        }
+        // 2. Bulk insert valid rows
+        if (insertPayloads.length > 0) {
+            const { data: inserted, error: insertError } = await client
+                .from('evaluations')
+                .insert(insertPayloads.map((p) => p.data))
+                .select('id');
+            if (insertError) {
+                // If bulk insert fails, mark all as error
+                for (const p of insertPayloads) {
+                    results.push({ row: p.index + 1, status: 'error', error: 'Database insert failed' });
+                }
+            }
+            else {
+                for (const p of insertPayloads) {
+                    results.push({ row: p.index + 1, status: 'success' });
+                }
+                // Log admin action
+                auditLogger_1.auditEmitter.emitLog({
+                    userId: req.user?.id || '',
+                    action: 'Imported Evaluations',
+                    entityType: 'evaluations',
+                    entityId: '',
+                    description: `Bulk imported ${inserted.length} evaluations from CSV`,
+                });
+                // Invalidate caches
+                cache_1.memoryCache.clearPattern(/^dashboard-metrics:/);
+            }
+        }
+        // Sort results by row number
+        results.sort((a, b) => a.row - b.row);
+        const successCount = results.filter((r) => r.status === 'success').length;
+        const errorCount = results.filter((r) => r.status === 'error').length;
+        return res.status(200).json({
+            message: `Import completed: ${successCount} succeeded, ${errorCount} failed`,
+            successCount,
+            errorCount,
+            totalRows: rows.length,
+            results,
+        });
+    }
+    catch (err) {
+        console.error('Import evaluations error:', err);
+        return res.status(500).json({ error: 'Internal Server Error' });
+    }
+};
+exports.importEvaluations = importEvaluations;
