@@ -30,13 +30,26 @@ const updateEvaluationSchema = z.object({
 
 export const getEvaluations = async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { track_id, search, page = '1', limit = '10' } = req.query;
+    const { track_id, search, task, page = '1', limit = '10' } = req.query;
     const client = getSupabaseClient(req.token);
 
     const pageNum = parseInt(page as string, 10);
     const limitNum = parseInt(limit as string, 10);
     const from = (pageNum - 1) * limitNum;
     const to = from + limitNum - 1;
+
+    // Fetch unique task names for filters (filtered by track)
+    let taskQuery = client
+      .from('evaluations')
+      .select('task_name, technical_members!inner(track_id)');
+
+    if (req.user?.role === 'head') {
+      taskQuery = taskQuery.eq('technical_members.track_id', req.user.track_id);
+    } else if (track_id) {
+      taskQuery = taskQuery.eq('technical_members.track_id', track_id);
+    }
+    const { data: allTasks } = await taskQuery;
+    const uniqueTasks = Array.from(new Set((allTasks || []).map((t: any) => t.task_name))).sort();
 
     let query = client
       .from('evaluations')
@@ -50,10 +63,27 @@ export const getEvaluations = async (req: AuthenticatedRequest, res: Response) =
       query = query.eq('technical_members.track_id', track_id);
     }
 
-    // 3. Search filter
+    // 3. Task filter
+    if (task) {
+      query = query.eq('task_name', task);
+    }
+
+    // 4. Search filter (cross-table OR workaround for PostgREST limitation)
     if (search) {
       const searchStr = `%${search}%`;
-      query = query.or(`task_name.ilike.${searchStr},technical_members.name.ilike.${searchStr}`);
+      // Resolve member IDs matching the search name
+      const { data: members } = await client
+        .from('technical_members')
+        .select('id')
+        .ilike('name', searchStr);
+
+      const matchingMemberIds = (members || []).map((m) => m.id);
+
+      if (matchingMemberIds.length > 0) {
+        query = query.or(`task_name.ilike.${searchStr},technical_member_id.in.(${matchingMemberIds.join(',')})`);
+      } else {
+        query = query.ilike('task_name', searchStr);
+      }
     }
 
     const { data: evaluations, count, error } = await query
@@ -64,6 +94,7 @@ export const getEvaluations = async (req: AuthenticatedRequest, res: Response) =
 
     return res.status(200).json({
       evaluations,
+      tasks: uniqueTasks,
       total: count || 0,
       page: pageNum,
       limit: limitNum,
