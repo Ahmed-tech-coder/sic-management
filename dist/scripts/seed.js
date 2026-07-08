@@ -9,6 +9,7 @@ const DEFAULT_TRACKS = [
     "Data Analysis",
     "UI / UX",
     "HR",
+    "Media"
 ];
 const normalizePhoneToDigits = (phone) => {
     if (!phone)

@@ -9,15 +9,23 @@ import { memoryCache } from '../utils/cache';
 const createEvaluationSchema = z.object({
   task_name: z.string().min(2, 'Task name must be at least 2 characters'),
   technical_member_id: z.string().uuid('Invalid technical member ID'),
-  score: z.number().min(0, 'Score must be at least 0').max(100, 'Score cannot exceed 100'),
+  score: z.number().min(0, 'Score must be at least 0'),
+  max_score: z.number().min(1, 'Max score must be at least 1').default(100),
   notes: z.string().optional().nullable(),
+}).refine(data => data.score <= (data.max_score ?? 100), {
+  message: 'Score cannot exceed the task max score',
+  path: ['score'],
 });
 
 const updateEvaluationSchema = z.object({
   task_name: z.string().min(2, 'Task name must be at least 2 characters'),
   technical_member_id: z.string().uuid('Invalid technical member ID'),
-  score: z.number().min(0, 'Score must be at least 0').max(100, 'Score cannot exceed 100'),
+  score: z.number().min(0, 'Score must be at least 0'),
+  max_score: z.number().min(1, 'Max score must be at least 1').default(100),
   notes: z.string().optional().nullable(),
+}).refine(data => data.score <= (data.max_score ?? 100), {
+  message: 'Score cannot exceed the task max score',
+  path: ['score'],
 });
 
 export const getEvaluations = async (req: AuthenticatedRequest, res: Response) => {
@@ -74,7 +82,7 @@ export const createEvaluation = async (req: AuthenticatedRequest, res: Response)
       return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Validation error' });
     }
 
-    const { task_name, technical_member_id, score, notes } = parsed.data;
+    const { task_name, technical_member_id, score, max_score, notes } = parsed.data;
     const client = getSupabaseClient(req.token);
 
     // 1. Fetch member to check if they exist and match the Head's track
@@ -101,6 +109,7 @@ export const createEvaluation = async (req: AuthenticatedRequest, res: Response)
         technical_member_id,
         evaluator_id: req.user?.id,
         score,
+        max_score: max_score ?? 100,
         notes: notes || null,
       })
       .select('*, technical_members(name, track_id)')
@@ -114,7 +123,7 @@ export const createEvaluation = async (req: AuthenticatedRequest, res: Response)
       action: 'Created Evaluation',
       entityType: 'evaluations',
       entityId: evaluation.id,
-      description: `Evaluated ${member.name} for task "${task_name}" with score ${score}/100`,
+      description: `Evaluated ${member.name} for task "${task_name}" with score ${score}/${max_score ?? 100}`,
     });
 
     // Invalidate dashboard metrics cache
@@ -138,7 +147,7 @@ export const updateEvaluation = async (req: AuthenticatedRequest, res: Response)
       return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Validation error' });
     }
 
-    const { task_name, technical_member_id, score, notes } = parsed.data;
+    const { task_name, technical_member_id, score, max_score, notes } = parsed.data;
     const client = getSupabaseClient(req.token);
 
     // 1. Fetch existing evaluation
@@ -175,6 +184,7 @@ export const updateEvaluation = async (req: AuthenticatedRequest, res: Response)
         task_name,
         technical_member_id,
         score,
+        max_score: max_score ?? 100,
         notes: notes || null,
         updated_at: new Date().toISOString(),
       })
@@ -190,7 +200,7 @@ export const updateEvaluation = async (req: AuthenticatedRequest, res: Response)
       action: 'Updated Evaluation',
       entityType: 'evaluations',
       entityId: id as string,
-      description: `Updated evaluation for ${member.name} - task "${task_name}" - score ${score}/100`,
+      description: `Updated evaluation for ${member.name} - task "${task_name}" - score ${score}/${max_score ?? 100}`,
     });
 
     // Invalidate dashboard metrics cache
@@ -250,7 +260,7 @@ export const deleteEvaluation = async (req: AuthenticatedRequest, res: Response)
 
 // Helper generator function for CSV streaming to achieve O(1) memory footprint
 async function* getEvaluationsCsvGenerator(client: any, trackId: any) {
-  yield 'Task Name,Technical Member,Track,Evaluator,Score,Notes,Created Date\n';
+  yield 'Task Name,Technical Member,Track,Evaluator,Score,Max Score,Notes,Created Date\n';
 
   let page = 0;
   const limit = 500;
@@ -288,6 +298,7 @@ async function* getEvaluationsCsvGenerator(client: any, trackId: any) {
         ev.technical_members?.tracks?.name || '',
         ev.evaluator?.name || 'System',
         ev.score,
+        ev.max_score ?? 100,
         ev.notes || '',
         new Date(ev.created_at).toLocaleDateString(),
       ];
