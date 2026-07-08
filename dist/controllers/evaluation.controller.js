@@ -360,16 +360,26 @@ const importEvaluations = async (req, res) => {
         }
         // Auto-create missing students in the head's track
         if (missingNames.size > 0) {
-            const newMembers = Array.from(missingNames).map((name) => ({
-                name,
-                track_id: trackId,
-            }));
+            const newMembers = Array.from(missingNames).map((name) => {
+                const cleanName = name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase() || 'student';
+                const uniqueSuffix = `${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+                // Generate a 10-digit numeric string for phone
+                const randomPhone = `01${Math.floor(10000000 + Math.random() * 90000000)}`;
+                return {
+                    name,
+                    track_id: trackId,
+                    email: `${cleanName}_${uniqueSuffix}@temporary.com`,
+                    phone: randomPhone,
+                };
+            });
             const { data: createdMembers, error: createError } = await client
                 .from('technical_members')
                 .insert(newMembers)
                 .select('id, name');
-            if (createError)
+            if (createError) {
+                console.error('Auto-create members error details:', createError);
                 throw createError;
+            }
             // Add newly created members to the lookup map
             for (const m of createdMembers || []) {
                 memberMap.set(m.name.trim().toLowerCase(), m.id);
