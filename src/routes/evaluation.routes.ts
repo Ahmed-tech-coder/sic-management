@@ -5,6 +5,7 @@ import {
   updateEvaluation,
   deleteEvaluation,
   exportEvaluations,
+  importEvaluations,
 } from '../controllers/evaluation.controller';
 import { authenticate, authorize } from '../middlewares/auth.middleware';
 
@@ -12,6 +13,7 @@ const router = Router();
 
 router.get('/', authenticate, getEvaluations);
 router.get('/export', authenticate, authorize(['leader', 'hr']), exportEvaluations);
+router.post('/import', authenticate, authorize(['head']), importEvaluations);
 router.post('/', authenticate, authorize(['head']), createEvaluation);
 router.put('/:id', authenticate, authorize(['head']), updateEvaluation);
 router.delete('/:id', authenticate, authorize(['head']), deleteEvaluation);

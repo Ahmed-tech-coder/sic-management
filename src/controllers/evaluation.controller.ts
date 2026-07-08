@@ -350,3 +350,133 @@ export const exportEvaluations = async (req: AuthenticatedRequest, res: Response
     }
   }
 };
+
+// Bulk import evaluations from parsed CSV data
+const importRowSchema = z.object({
+  assessment_name: z.string().min(1, 'Assessment name is required'),
+  student_name: z.string().min(1, 'Student name is required'),
+  total_grade: z.number().min(1, 'Total grade must be at least 1'),
+  student_grade: z.number().min(0, 'Student grade must be at least 0'),
+});
+
+export const importEvaluations = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { rows } = req.body;
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({ error: 'No data rows provided' });
+    }
+
+    if (rows.length > 500) {
+      return res.status(400).json({ error: 'Cannot import more than 500 rows at once' });
+    }
+
+    const client = getSupabaseClient(req.token);
+    const trackId = req.user?.track_id;
+
+    // 1. Fetch all members in the head's track for name matching
+    const { data: trackMembers, error: membersError } = await client
+      .from('technical_members')
+      .select('id, name, track_id')
+      .eq('track_id', trackId);
+
+    if (membersError) throw membersError;
+
+    // Build a name -> id lookup map (case-insensitive, trimmed)
+    const memberMap = new Map<string, string>();
+    for (const m of trackMembers || []) {
+      memberMap.set(m.name.trim().toLowerCase(), m.id);
+    }
+
+    const results: { row: number; status: 'success' | 'error'; error?: string }[] = [];
+    const insertPayloads: any[] = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const raw = rows[i];
+      const parsed = importRowSchema.safeParse({
+        assessment_name: raw.assessment_name?.toString().trim(),
+        student_name: raw.student_name?.toString().trim(),
+        total_grade: Number(raw.total_grade),
+        student_grade: Number(raw.student_grade),
+      });
+
+      if (!parsed.success) {
+        results.push({ row: i + 1, status: 'error', error: parsed.error.issues[0]?.message || 'Validation error' });
+        continue;
+      }
+
+      const { assessment_name, student_name, total_grade, student_grade } = parsed.data;
+
+      if (student_grade > total_grade) {
+        results.push({ row: i + 1, status: 'error', error: `Student grade (${student_grade}) exceeds total grade (${total_grade})` });
+        continue;
+      }
+
+      const memberId = memberMap.get(student_name.toLowerCase());
+      if (!memberId) {
+        results.push({ row: i + 1, status: 'error', error: `Student "${student_name}" not found in your track` });
+        continue;
+      }
+
+      insertPayloads.push({
+        index: i,
+        data: {
+          task_name: assessment_name,
+          technical_member_id: memberId,
+          evaluator_id: req.user?.id,
+          score: student_grade,
+          max_score: total_grade,
+          notes: null,
+        },
+      });
+    }
+
+    // 2. Bulk insert valid rows
+    if (insertPayloads.length > 0) {
+      const { data: inserted, error: insertError } = await client
+        .from('evaluations')
+        .insert(insertPayloads.map((p) => p.data))
+        .select('id');
+
+      if (insertError) {
+        // If bulk insert fails, mark all as error
+        for (const p of insertPayloads) {
+          results.push({ row: p.index + 1, status: 'error', error: 'Database insert failed' });
+        }
+      } else {
+        for (const p of insertPayloads) {
+          results.push({ row: p.index + 1, status: 'success' });
+        }
+
+        // Log admin action
+        auditEmitter.emitLog({
+          userId: req.user?.id || '',
+          action: 'Imported Evaluations',
+          entityType: 'evaluations',
+          entityId: '',
+          description: `Bulk imported ${inserted.length} evaluations from CSV`,
+        });
+
+        // Invalidate caches
+        memoryCache.clearPattern(/^dashboard-metrics:/);
+      }
+    }
+
+    // Sort results by row number
+    results.sort((a, b) => a.row - b.row);
+
+    const successCount = results.filter((r) => r.status === 'success').length;
+    const errorCount = results.filter((r) => r.status === 'error').length;
+
+    return res.status(200).json({
+      message: `Import completed: ${successCount} succeeded, ${errorCount} failed`,
+      successCount,
+      errorCount,
+      totalRows: rows.length,
+      results,
+    });
+  } catch (err) {
+    console.error('Import evaluations error:', err);
+    return res.status(500).json({ error: 'Internal Server Error' });
+  }
+};
