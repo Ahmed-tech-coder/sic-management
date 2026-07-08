@@ -101,6 +101,18 @@ export const createEvaluation = async (req: AuthenticatedRequest, res: Response)
       return res.status(403).json({ error: 'Forbidden: You can only evaluate members of your own track' });
     }
 
+    // Check for duplicate: same student + same task
+    const { data: existingEval } = await client
+      .from('evaluations')
+      .select('id')
+      .eq('technical_member_id', technical_member_id)
+      .eq('task_name', task_name)
+      .maybeSingle();
+
+    if (existingEval) {
+      return res.status(409).json({ error: `This student has already been evaluated for "${task_name}"` });
+    }
+
     // 2. Create evaluation
     const { data: evaluation, error } = await client
       .from('evaluations')
@@ -388,6 +400,23 @@ export const importEvaluations = async (req: AuthenticatedRequest, res: Response
       memberMap.set(m.name.trim().toLowerCase(), m.id);
     }
 
+    // Fetch existing evaluations for duplicate detection
+    const memberIds = Array.from(memberMap.values());
+    const existingSet = new Set<string>();
+    if (memberIds.length > 0) {
+      const { data: existingEvals } = await client
+        .from('evaluations')
+        .select('task_name, technical_member_id')
+        .in('technical_member_id', memberIds);
+
+      for (const ev of existingEvals || []) {
+        existingSet.add(`${ev.technical_member_id}::${ev.task_name.trim().toLowerCase()}`);
+      }
+    }
+
+    // Track duplicates within the CSV itself
+    const csvSeenSet = new Set<string>();
+
     const results: { row: number; status: 'success' | 'error'; error?: string }[] = [];
     const insertPayloads: any[] = [];
 
@@ -417,6 +446,20 @@ export const importEvaluations = async (req: AuthenticatedRequest, res: Response
         results.push({ row: i + 1, status: 'error', error: `Student "${student_name}" not found in your track` });
         continue;
       }
+
+      // Check for duplicate in existing DB records
+      const dupeKey = `${memberId}::${assessment_name.trim().toLowerCase()}`;
+      if (existingSet.has(dupeKey)) {
+        results.push({ row: i + 1, status: 'error', error: `"${student_name}" already evaluated for "${assessment_name}"` });
+        continue;
+      }
+
+      // Check for duplicate within the same CSV file
+      if (csvSeenSet.has(dupeKey)) {
+        results.push({ row: i + 1, status: 'error', error: `Duplicate entry in CSV: "${student_name}" for "${assessment_name}"` });
+        continue;
+      }
+      csvSeenSet.add(dupeKey);
 
       insertPayloads.push({
         index: i,
