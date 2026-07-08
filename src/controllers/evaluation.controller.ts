@@ -384,13 +384,11 @@ export const importEvaluations = async (req: AuthenticatedRequest, res: Response
     }
 
     const client = getSupabaseClient(req.token);
-    const trackId = req.user?.track_id;
 
-    // 1. Fetch all members in the head's track for name matching
+    // 1. Fetch all members across all tracks for name matching
     const { data: trackMembers, error: membersError } = await client
       .from('technical_members')
-      .select('id, name, track_id')
-      .eq('track_id', trackId);
+      .select('id, name, track_id');
 
     if (membersError) throw membersError;
 
