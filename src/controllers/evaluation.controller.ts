@@ -302,8 +302,8 @@ export const deleteEvaluation = async (req: AuthenticatedRequest, res: Response)
 };
 
 // Helper generator function for CSV streaming to achieve O(1) memory footprint
-async function* getEvaluationsCsvGenerator(client: any, trackId: any) {
-  yield 'Task Name,Technical Member,Track,Evaluator,Score,Max Score,Notes,Created Date\n';
+async function* getEvaluationsCsvGenerator(client: any, trackId: any, search?: string, task?: string) {
+  yield 'Person Name,Task Name,Score\n';
 
   let page = 0;
   const limit = 500;
@@ -315,10 +315,30 @@ async function* getEvaluationsCsvGenerator(client: any, trackId: any) {
 
     let query = client
       .from('evaluations')
-      .select('*, technical_members!inner(*, tracks!inner(name)), evaluator:users(name)');
+      .select('task_name, score, technical_members!inner(name, track_id)');
 
     if (trackId) {
       query = query.eq('technical_members.track_id', trackId);
+    }
+
+    if (task) {
+      query = query.eq('task_name', task);
+    }
+
+    if (search) {
+      const searchStr = `%${search}%`;
+      const { data: members } = await client
+        .from('technical_members')
+        .select('id')
+        .ilike('name', searchStr);
+
+      const matchingMemberIds = (members || []).map((m: any) => m.id);
+
+      if (matchingMemberIds.length > 0) {
+        query = query.or(`task_name.ilike.${searchStr},technical_member_id.in.(${matchingMemberIds.join(',')})`);
+      } else {
+        query = query.ilike('task_name', searchStr);
+      }
     }
 
     const { data, error } = await query
@@ -336,14 +356,9 @@ async function* getEvaluationsCsvGenerator(client: any, trackId: any) {
 
     for (const ev of data) {
       const row = [
-        ev.task_name,
         ev.technical_members?.name || '',
-        ev.technical_members?.tracks?.name || '',
-        ev.evaluator?.name || 'System',
+        ev.task_name,
         ev.score,
-        ev.max_score ?? 100,
-        ev.notes || '',
-        new Date(ev.created_at).toLocaleDateString(),
       ];
 
       const csvRow = row
@@ -368,13 +383,15 @@ async function* getEvaluationsCsvGenerator(client: any, trackId: any) {
 
 export const exportEvaluations = async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { track_id } = req.query;
+    const { track_id, search, task } = req.query;
     const client = getSupabaseClient(req.token);
+
+    const effectiveTrackId = req.user?.role === 'head' ? req.user.track_id : track_id;
 
     res.setHeader('Content-Disposition', `attachment; filename=Evaluations_Report.csv`);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
 
-    const csvStream = Readable.from(getEvaluationsCsvGenerator(client, track_id));
+    const csvStream = Readable.from(getEvaluationsCsvGenerator(client, effectiveTrackId, search as string | undefined, task as string | undefined));
 
     csvStream.on('error', (err) => {
       console.error('CSV Stream processing error:', err);

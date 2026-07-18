@@ -12,7 +12,7 @@ import { authenticate, authorize } from '../middlewares/auth.middleware';
 const router = Router();
 
 router.get('/', authenticate, getEvaluations);
-router.get('/export', authenticate, authorize(['leader', 'hr']), exportEvaluations);
+router.get('/export', authenticate, authorize(['head', 'leader', 'hr']), exportEvaluations);
 router.post('/import', authenticate, authorize(['head']), importEvaluations);
 router.post('/', authenticate, authorize(['head']), createEvaluation);
 router.put('/:id', authenticate, authorize(['head']), updateEvaluation);
